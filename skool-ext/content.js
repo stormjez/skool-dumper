@@ -34,54 +34,75 @@ function getNextModule(children, currentModuleId) {
   return flat[idx + 1];
 }
 
-// Converte il formato JSON dell'editor Skool (Slate/ProseMirror) in markdown
+// Converte il formato ProseMirror/TipTap di Skool in Markdown
 function slateToMarkdown(raw) {
+  return prosemirrorToMarkdown(raw);
+}
+
+function prosemirrorToMarkdown(raw) {
   try {
-    // Rimuovi prefisso [v2] se presente
     const clean = raw.replace(/^\[v2\]/, "").trim();
     const nodes = JSON.parse(clean);
     if (!Array.isArray(nodes)) return raw;
-    const lines = [];
-    for (const node of nodes) {
-      lines.push(nodeToMd(node));
-    }
-    return lines.join("\n\n").trim();
+    return nodes.map(n => pmNodeToMd(n, 0)).filter(Boolean).join("\n\n").trim();
   } catch(e) {
     return raw;
   }
 }
 
-function nodeToMd(node) {
+function pmNodeToMd(node, depth) {
   if (!node) return "";
-  const type = node.type;
-  const children = node.children || [];
-  const text = children.map(leafToMd).join("");
-
-  switch(type) {
-    case "heading-one":   return `# ${text}`;
-    case "heading-two":   return `## ${text}`;
-    case "heading-three": return `### ${text}`;
-    case "bulleted-list":
-      return (node.children || []).map(li => `- ${(li.children || []).map(leafToMd).join("")}`).join("\n");
-    case "numbered-list":
-      return (node.children || []).map((li, i) => `${i+1}. ${(li.children || []).map(leafToMd).join("")}`).join("\n");
-    case "block-quote":   return `> ${text}`;
-    case "code-block":    return `\`\`\`\n${text}\n\`\`\``;
-    case "link":          return `[${text}](${node.url || ""})`;
-    case "image":         return `![image](${node.url || ""})`;
-    default:              return text;
+  switch(node.type) {
+    case "paragraph":
+      return (node.content || []).map(c => pmNodeToMd(c, depth)).join("");
+    case "text": {
+      let t = node.text || "";
+      for (const m of (node.marks || [])) {
+        if (m.type === "bold")   t = `**${t}**`;
+        if (m.type === "italic") t = `_${t}_`;
+        if (m.type === "code")   t = `\`${t}\``;
+        if (m.type === "link")   t = `[${t}](${m.attrs?.href || ""})`;
+      }
+      return t;
+    }
+    case "hardBreak": return "\n";
+    case "heading": {
+      const level = node.attrs?.level || 1;
+      const text = (node.content || []).map(c => pmNodeToMd(c, depth)).join("");
+      return "#".repeat(level) + " " + text;
+    }
+    case "bulletList":
+    case "unorderedList":
+      return (node.content || []).map(li => {
+        const indent = "  ".repeat(depth);
+        return (li.content || []).map((c, i) => {
+          const text = pmNodeToMd(c, depth + 1);
+          if (i === 0) return text.split("\n").map((l, j) => j === 0 ? `${indent}- ${l}` : `${indent}  ${l}`).join("\n");
+          return text;
+        }).join("\n");
+      }).join("\n");
+    case "orderedList":
+      return (node.content || []).map((li, idx) => {
+        const indent = "  ".repeat(depth);
+        return (li.content || []).map((c, i) => {
+          const text = pmNodeToMd(c, depth + 1);
+          if (i === 0) return text.split("\n").map((l, j) => j === 0 ? `${indent}${idx+1}. ${l}` : `${indent}   ${l}`).join("\n");
+          return text;
+        }).join("\n");
+      }).join("\n");
+    case "listItem":
+      return (node.content || []).map(c => pmNodeToMd(c, depth)).join("\n");
+    case "blockquote":
+      return (node.content || []).map(c => pmNodeToMd(c, depth)).join("\n").split("\n").map(l => `> ${l}`).join("\n");
+    case "codeBlock":
+      return "```\n" + (node.content || []).map(c => pmNodeToMd(c, depth)).join("") + "\n```";
+    case "image":
+      return `![${node.attrs?.alt || ""}](${node.attrs?.src || ""})`;
+    default:
+      return (node.content || []).map(c => pmNodeToMd(c, depth)).join("");
   }
 }
 
-function leafToMd(leaf) {
-  if (!leaf) return "";
-  let t = leaf.text || "";
-  if (!t) return "";
-  if (leaf.bold)   t = `**${t}**`;
-  if (leaf.italic) t = `_${t}_`;
-  if (leaf.code)   t = `\`${t}\``;
-  return t;
-}
 
 function getVideoDataFromPageProps(pageProps) {
   if (!pageProps) return null;
